@@ -1,0 +1,105 @@
+# Paint Appearance -- local development stack.
+#
+#   cp .env.example .env            # then change the three passwords
+#   docker compose up -d postgres   # first start creates the roles and the empty database
+#   (restore the data dump -- README.md "Load the data")
+#   docker compose run --rm migrate # alembic upgrade head, as `migrator`
+#   docker compose up -d api        # API + built frontend on http://localhost:8000
+#   docker compose --profile dev up -d web   # optional: Vite dev server on http://localhost:5173
+#
+# Every port is bound to 127.0.0.1: this database holds Ford plant quality data
+# even locally, and 0.0.0.0 would publish it on the LAN.
+#
+# PostgreSQL major: 18 is what every migration has been run on. Which major
+# Cloud SQL will run is still open (docs/DEFERRED.md D6); change
+# POSTGRES_MAJOR in .env when it is decided.
+
+name: paint-appearance
+
+x-app-env: &app-env
+  ENV: development
+  # No sign-in in this release: every request is one shared account with every role.
+  AUTH_OPEN_ACCESS: "true"
+  APP_DATABASE_URL: postgresql+psycopg://app_rw:${APP_RW_PASSWORD:-change-me-app}@postgres:5432/paint_appearance
+  RAW_STORE_DIR: /data/raw
+  API_DOCS_ENABLED: "true"
+  CORS_ORIGINS: http://localhost:5173,http://127.0.0.1:5173
+
+services:
+  postgres:
+    image: postgres:${POSTGRES_MAJOR:-18}-alpine
+    container_name: paint-appearance-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      # Local-only defaults; set real values in .env (gitignored).
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me-postgres}
+      # The application database is created by db/docker-init.sh, owned by migrator.
+      POSTGRES_DB: postgres
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --lc-collate=C --lc-ctype=C"
+      MIGRATOR_PASSWORD: ${MIGRATOR_PASSWORD:-change-me-migrator}
+      APP_RW_PASSWORD: ${APP_RW_PASSWORD:-change-me-app}
+      TZ: UTC
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql
+      - ./db/create_roles.sql:/db/create_roles.sql:ro
+      - ./db/docker-init.sh:/docker-entrypoint-initdb.d/10-roles.sh:ro
+      # Put the dump in ./data/ (gitignored) to restore it from inside the container.
+      - ./data:/import:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  migrate:
+    build: .
+    image: paint-appearance:local
+    profiles: ["tools"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      MIGRATOR_DATABASE_URL: postgresql+psycopg://migrator:${MIGRATOR_PASSWORD:-change-me-migrator}@postgres:5432/paint_appearance
+    command: ["alembic", "upgrade", "head"]
+
+  api:
+    build: .
+    image: paint-appearance:local
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      <<: *app-env
+    ports:
+      - "127.0.0.1:${API_PORT:-8000}:8080"
+    volumes:
+      - rawstore:/data/raw
+
+  web:
+    image: node:24-slim
+    profiles: ["dev"]
+    working_dir: /app/frontend
+    depends_on:
+      - api
+    environment:
+      # Read by the browser, so it is the host's address of the API.
+      VITE_API_BASE_URL: http://localhost:${API_PORT:-8000}
+    command: ["sh", "-c", "corepack enable && pnpm install --frozen-lockfile && pnpm dev --host 0.0.0.0"]
+    ports:
+      - "127.0.0.1:5173:5173"
+    volumes:
+      - ./frontend:/app/frontend
+      - web_node_modules:/app/frontend/node_modules
+
+volumes:
+  pgdata:
+    name: paint-appearance-pgdata
+  rawstore:
+    name: paint-appearance-rawstore
+  web_node_modules:
+    name: paint-appearance-web-node-modules

@@ -60,10 +60,36 @@ jobs:
           T01_DB: none
         run: python -m pytest tests -q -o addopts=""
 
-  image:
+  # The whole Compose stack, as a developer starts it from README.md.
+  compose:
     runs-on: ubuntu-latest
     needs: [frontend, backend]
     steps:
       - uses: actions/checkout@v4
-      - name: Build the Cloud Run image
-        run: docker build --tag paint-appearance:ci .
+      - name: Settings from the example
+        run: cp .env.example .env
+      - name: Database (first start creates migrator, app_rw and the database)
+        run: docker compose up -d --wait postgres
+      - name: Build the image
+        run: docker compose build api
+      - name: Migrate the empty database
+        # 0025 seeds standards for colours that only the real data has, so an
+        # empty database stops at 0024 (the whole schema before it). With the
+        # data restored, `alembic upgrade head` runs to the end (README.md).
+        run: docker compose run --rm migrate alembic upgrade 0024
+      - name: API (waits for its health check)
+        run: docker compose up -d --wait api
+      - name: The site and the API answer
+        run: |
+          set -e
+          curl -fsS http://127.0.0.1:8000/health/ready
+          curl -fsS http://127.0.0.1:8000/api/v1/auth/me | grep -q '"open-access"'
+          curl -fsS http://127.0.0.1:8000/ | grep -qi '<div id="root"'
+          curl -fsS http://127.0.0.1:8000/plant/SAP | grep -qi '<div id="root"'
+          test "$(curl -s -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:8000/api/v1/nope)" = 404
+      - name: Logs
+        if: failure()
+        run: docker compose logs --no-color
+      - name: Stop
+        if: always()
+        run: docker compose down -v

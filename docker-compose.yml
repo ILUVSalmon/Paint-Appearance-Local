@@ -79,6 +79,13 @@ services:
       - "127.0.0.1:${API_PORT:-8000}:8080"
     volumes:
       - rawstore:/data/raw
+    healthcheck:
+      # Ready = the database answers as app_rw and the raw store is writable.
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/health/ready', timeout=4)"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
 
   web:
     image: node:24-slim

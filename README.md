@@ -1,5 +1,7 @@
 # Paint Appearance — development repository
 
+> Moving to a new computer? Start with [docs/HANDOVER.md](docs/HANDOVER.md): what is ready, what you do yourself, and the open decisions.
+
 Paint Appearance is an internal web application for paint-quality measurements at four
 Ford plants (**AAT, FTM, FVL, SAP**). Plant staff upload the Excel workbooks produced by the
 **Wave Scan** (appearance: long/short wave, DOI, …) and **Film Thickness** gauges; the

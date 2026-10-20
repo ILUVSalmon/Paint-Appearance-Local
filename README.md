@@ -53,7 +53,7 @@ commands with `/` paths, `source .venv/bin/activate`, and `export NAME=value` in
 ## 2. Get the code and the data
 
 ```powershell
-git clone https://github.com/APAENSOT/Paint-Appearance.git "Paint Appearance Local"
+git clone https://github.com/ILUVSalmon/Paint-Appearance-Local.git "Paint Appearance Local"
 cd "Paint Appearance Local"
 ```
 
@@ -253,9 +253,16 @@ newer dump with different plant data can make them fail for data reasons, not co
 `docker-compose.yml` runs PostgreSQL 18, the migration job, the API (serving the built
 frontend) and, optionally, a Vite dev server. Every port is bound to `127.0.0.1`.
 
-> The Compose and Docker files have been checked statically (they parse, every path they
-> use exists, and the same commands were run natively) but **have not yet been run in
-> Docker**. Report anything that does not work.
+> CI (job `compose`) starts this stack from `.env.example` on every push and checks the
+> database roles, migrations, API health check and the site. The owner hands over a
+> ready `.env` with real passwords together with the data dump.
+>
+> If `postgres` was first started with other passwords, the database keeps them: remove
+> the (empty) volume with `docker compose down -v` before starting with the new `.env`.
+>
+> The original uploaded workbooks (optional: only needed to re-read an old held sheet)
+> go into the API's volume with `docker compose cp <folder>/raw/. api:/data/raw`; without
+> Docker, into `data/raw/`.
 
 ```powershell
 Copy-Item .env.example .env          # then change the three passwords in .env

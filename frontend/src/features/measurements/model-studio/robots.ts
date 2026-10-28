@@ -1,5 +1,6 @@
 import * as T from "three";
 import { RoundedBoxGeometry } from "three/addons/geometries/RoundedBoxGeometry.js";
+import { createSurfacePaths, surfaceBelow, type SurfaceSample } from "./surface-paths";
 
 const up = new T.Vector3(0, 1, 0);
 const down = new T.Vector3(0, -1, 0);
@@ -7,6 +8,8 @@ const upperLength = 1.25,
   foreLength = 1.726;
 
 export function buildWorkshop(scene: T.Scene) {
+  let surfaces: T.Mesh[] = [];
+  let rayHeight = 4;
   const workshop = new T.Group();
   scene.add(workshop);
   const white = new T.MeshStandardMaterial({ color: 0xe4e7e8, metalness: 0.2, roughness: 0.32 });
@@ -87,6 +90,7 @@ export function buildWorkshop(scene: T.Scene) {
       root.add(upper, fore);
       const elbow = mesh(new T.SphereGeometry(0.2, 20, 14), white, root);
       const wrist = new T.Group();
+      wrist.name = "Spray wrist";
       root.add(wrist);
       cylinder(0.12, 0.15, 0.19, 0, wrist);
       cylinder(0.066, 0.103, 0.22, -0.24, wrist);
@@ -99,6 +103,7 @@ export function buildWorkshop(scene: T.Scene) {
         side: T.DoubleSide,
       });
       const spray = mesh(new T.ConeGeometry(0.23, 0.4, 20, 1, true), sprayMaterial, wrist);
+      spray.name = "Paint spray";
       spray.position.y = -0.6;
       spray.visible = false;
       spray.castShadow = false;
@@ -116,20 +121,24 @@ export function buildWorkshop(scene: T.Scene) {
         park,
         gx,
         gz,
+        armScale: 1,
+        path: [] as SurfaceSample[],
       };
     }),
   );
   type Robot = (typeof robots)[number];
-  function solve(robot: Robot, end: T.Vector3) {
+  function solve(robot: Robot, end: T.Vector3, normal = up) {
+    const upperReach = upperLength * robot.armScale;
+    const foreReach = foreLength * robot.armScale;
     const delta = end.clone().sub(robot.shoulderPosition);
     const distance = T.MathUtils.clamp(
       delta.length(),
-      Math.abs(foreLength - upperLength) + 0.02,
-      upperLength + foreLength - 0.015,
+      Math.abs(foreReach - upperReach) + 0.02,
+      upperReach + foreReach - 0.015,
     );
     const direction = delta.normalize();
-    const along = (upperLength ** 2 - foreLength ** 2 + distance ** 2) / (2 * distance);
-    const bendHeight = Math.sqrt(Math.max(0, upperLength ** 2 - along ** 2));
+    const along = (upperReach ** 2 - foreReach ** 2 + distance ** 2) / (2 * distance);
+    const bendHeight = Math.sqrt(Math.max(0, upperReach ** 2 - along ** 2));
     const bend = up.clone().addScaledVector(direction, -direction.y);
     if (bend.lengthSq() < 0.001) bend.set(robot.gx, 0, 0);
     bend.normalize();
@@ -147,16 +156,35 @@ export function buildWorkshop(scene: T.Scene) {
     }
     robot.elbow.position.copy(elbow);
     robot.wrist.position.copy(wrist);
-    robot.wrist.quaternion.setFromUnitVectors(down, down);
+    robot.wrist.quaternion.setFromUnitVectors(down, normal.clone().negate());
   }
   function target(robot: Robot, amount: number) {
-    const x = robot.gx < 0 ? -2.3 + amount * 2.5 : 0.25 + amount * 2.5;
-    const y =
-      1.93 +
-      0.5 * T.MathUtils.smoothstep(x, -1.1, -0.5) * (1 - T.MathUtils.smoothstep(x, 0.9, 1.5));
-    return new T.Vector3(x, y, robot.gz * (0.63 + 0.22 * Math.sin(amount * Math.PI))).sub(
-      robot.root.position,
-    );
+    const path = robot.path;
+    if (!path.length) return { end: robot.park.clone(), normal: up.clone(), active: false };
+    const nextIndex = path.findIndex((sample) => sample.amount >= amount);
+    const b = path[nextIndex < 0 ? path.length - 1 : nextIndex];
+    const a = path[Math.max(0, (nextIndex < 0 ? path.length - 1 : nextIndex) - 1)];
+    const mix =
+      b.amount === a.amount
+        ? 0
+        : T.MathUtils.clamp((amount - a.amount) / (b.amount - a.amount), 0, 1);
+    const point = a.point.clone().lerp(b.point, mix);
+    // Project interpolation back to the mesh at roof/bonnet steps and openings.
+    const surface = surfaceBelow(surfaces, new T.Vector3(point.x, rayHeight, point.z));
+    const normal = surface?.normal ?? up.clone();
+    const end = (surface?.point ?? point)
+      .clone()
+      .addScaledVector(normal, 0.8)
+      .sub(robot.root.position);
+    return {
+      end,
+      normal,
+      active:
+        !!surface &&
+        amount >= path[0].amount &&
+        amount <= path[path.length - 1].amount &&
+        a.point.distanceTo(b.point) < 0.3,
+    };
   }
   const ease = (t: number) => t * t * (3 - 2 * t);
   function park() {
@@ -169,20 +197,53 @@ export function buildWorkshop(scene: T.Scene) {
   return {
     group: workshop,
     park,
+    fit(meshes: T.Mesh[]) {
+      surfaces = meshes;
+      const paths = createSurfacePaths(meshes);
+      const bounds = new T.Box3();
+      meshes.forEach((mesh) => bounds.union(new T.Box3().setFromObject(mesh)));
+      if (bounds.isEmpty()) return;
+      rayHeight = bounds.max.y + 1;
+      const center = bounds.getCenter(new T.Vector3());
+      const size = bounds.getSize(new T.Vector3());
+      robots.forEach((robot, index) => {
+        robot.path = paths[index] ?? [];
+        robot.root.position.set(
+          center.x + robot.gx * size.x * 0.25,
+          -0.12,
+          center.z + robot.gz * (size.z * 0.5 + 0.75),
+        );
+        const reach = Math.max(
+          ...robot.path.map((sample) =>
+            sample.point
+              .clone()
+              .addScaledVector(sample.normal, 0.8)
+              .sub(robot.root.position)
+              .distanceTo(robot.shoulderPosition),
+          ),
+          0,
+        );
+        robot.armScale = Math.max(1, (reach + 0.12) / (upperLength + foreLength));
+        robot.upper.scale.y = robot.fore.scale.y = robot.armScale;
+      });
+      park();
+    },
     shade(hex: string) {
       robots.forEach((r) => r.sprayMaterial.color.set(hex));
     },
     animate(t: number) {
       const amount = T.MathUtils.clamp((t - 0.14) / 0.69, 0, 1);
       for (const r of robots) {
+        const sample = target(r, amount);
         const end =
           t < 0.14
-            ? r.park.clone().lerp(target(r, 0), ease(t / 0.14))
+            ? r.park.clone().lerp(target(r, 0).end, ease(t / 0.14))
             : t > 0.83
-              ? target(r, 1).lerp(r.park, ease((t - 0.83) / 0.17))
-              : target(r, amount);
-        solve(r, end);
-        r.spray.visible = t >= 0.14 && t <= 0.83;
+              ? target(r, 1).end.lerp(r.park, ease((t - 0.83) / 0.17))
+              : sample.end;
+        const blend = t < 0.14 ? ease(t / 0.14) : t > 0.83 ? 1 - ease((t - 0.83) / 0.17) : 1;
+        solve(r, end, up.clone().lerp(sample.normal, blend).normalize());
+        r.spray.visible = t >= 0.14 && t <= 0.83 && sample.active;
       }
       return amount;
     },

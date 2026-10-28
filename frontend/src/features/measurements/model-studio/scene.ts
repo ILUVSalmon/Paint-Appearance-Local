@@ -9,6 +9,7 @@ import { RANGER_ASSET_VERSION } from "./point-placement";
 import { BODY_ZONES, type BodyZoneId } from "./body-zones";
 import { splitBodyPanels } from "./panel-geometry";
 import { FINISH_VALUES, type PaintFinish } from "./paint-finish";
+import { closeRoofOpenings } from "./surface-paths";
 
 export type StudioView =
   "workshop" | "body" | "front" | "rear" | "side" | "opposite" | "top" | "under";
@@ -114,6 +115,7 @@ export function createStudio(
     previousFinish: { value: new T.Vector3(...FINISH_VALUES.unpainted) },
     nextFinish: { value: new T.Vector3(...FINISH_VALUES.unpainted) },
     amount: { value: 1 },
+    bounds: { value: new T.Vector3(-2.5, 0.25, 2.85) },
   };
   material.onBeforeCompile = (shader) => {
     Object.assign(shader.uniforms, {
@@ -122,6 +124,7 @@ export function createStudio(
       coatPreviousFinish: uniforms.previousFinish,
       coatNextFinish: uniforms.nextFinish,
       coatAmount: uniforms.amount,
+      coatBounds: uniforms.bounds,
     });
     shader.vertexShader = "varying vec3 coatPosition;\n" + shader.vertexShader;
     shader.vertexShader = shader.vertexShader.replace(
@@ -131,7 +134,7 @@ export function createStudio(
     shader.fragmentShader =
       `varying vec3 coatPosition;
       uniform vec3 coatPrevious;uniform vec3 coatNext;
-      uniform vec3 coatPreviousFinish;uniform vec3 coatNextFinish;uniform float coatAmount;
+      uniform vec3 coatPreviousFinish;uniform vec3 coatNextFinish;uniform float coatAmount;uniform vec3 coatBounds;
       float pigmentHash(vec3 p) {
         return fract(sin(dot(p,vec3(12.9898,78.233,37.719)))*43758.5453);
       }
@@ -148,7 +151,7 @@ export function createStudio(
     shader.fragmentShader = shader.fragmentShader.replace(
       "#include <color_fragment>",
       `#include <color_fragment>
-      float localX=coatPosition.x<.25?(coatPosition.x+2.5)/2.75:(coatPosition.x-.25)/2.6;
+      float localX=coatPosition.x<coatBounds.y?(coatPosition.x-coatBounds.x)/(coatBounds.y-coatBounds.x):(coatPosition.x-coatBounds.y)/(coatBounds.z-coatBounds.y);
       float coverage=coatAmount>=1.0?1.0:1.0-smoothstep(coatAmount*1.22-.11,coatAmount*1.22+.03,localX);
       vec3 coatFinish=mix(coatPreviousFinish,coatNextFinish,coverage);
       diffuseColor.rgb=mix(coatPrevious,coatNext,coverage);
@@ -454,6 +457,15 @@ export function createStudio(
       replaced.forEach((m) => m.dispose());
       scene.add(gltf.scene);
       gltf.scene.updateMatrixWorld(true);
+      closeRoofOpenings(bodyMeshes);
+      const paintBounds = new T.Box3().setFromObject(gltf.scene);
+      const paintCenter = (paintBounds.min.x + paintBounds.max.x) / 2;
+      const paintInset = (paintBounds.max.x - paintBounds.min.x) * 0.04;
+      uniforms.bounds.value.set(
+        paintBounds.min.x + paintInset,
+        paintCenter,
+        paintBounds.max.x - paintInset,
+      );
       if (previewAsset) previewBounds = new T.Box3().setFromObject(gltf.scene);
       panelGroups = previewAsset ? new Map() : splitBodyPanels(bodyMeshes);
       // Keep source vertex/index order intact: saved anchors use the original mesh coordinates.
@@ -462,6 +474,7 @@ export function createStudio(
         mesh.raycast = acceleratedRaycast;
       };
       bodyMeshes.forEach(accelerate);
+      workshop.fit(bodyMeshes);
       panelGroups.forEach((group) =>
         group.traverse((node) => {
           if (node instanceof T.Mesh) accelerate(node);

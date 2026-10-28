@@ -46,7 +46,7 @@ export const PREPARED_BODIES: Readonly<Record<string, BodyAsset>> = {
   U704: body(
     "everest",
     "Everest",
-    "Sunroof opening and repaired lower liftgate. Lamps and glass remain open.",
+    "Closed paintable roof and repaired lower liftgate. Lamps and glass remain open.",
   ),
   V363: body(
     "transit",
@@ -61,7 +61,7 @@ export const PREPARED_BODIES: Readonly<Record<string, BodyAsset>> = {
   CX743: body(
     "territory",
     "Territory",
-    "Territory body panels from the supplied 2022 model, with four doors, restored window pillars and panoramic roof opening. Visual inspection body, not engineering CAD.",
+    "Territory body panels from the supplied 2022 model, with four doors, restored window pillars and a closed paintable roof. Visual inspection body, not engineering CAD.",
     CX743_BODY_VERSION,
   ),
 };
